@@ -1,0 +1,5 @@
+{
+  "name": "GeoMath",
+  "description": "A dynamic geometry drawing tool for students to explore math concepts.",
+  "requestFramePermissions": []
+}
