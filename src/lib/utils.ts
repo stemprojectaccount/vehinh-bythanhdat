@@ -47,6 +47,27 @@ export function calculateAngle(p1: {x:number, y:number}, p2: {x:number, y:number
   return Math.acos(clampedCosB) * (180 / Math.PI);
 }
 
+export function getIncircle(pts: {x: number, y: number}[]) {
+    if (pts.length < 3) return null;
+    const A = pts[0];
+    const B = pts[1];
+    const C = pts[2];
+    const a = distance(B, C);
+    const b = distance(A, C);
+    const c = distance(A, B);
+    const perimeter = a + b + c;
+    if (perimeter === 0) return null;
+    const center = {
+        x: (a * A.x + b * B.x + c * C.x) / perimeter,
+        y: (a * A.y + b * B.y + c * C.y) / perimeter
+    };
+    const semi = perimeter / 2;
+    // Heron's formula
+    const area = Math.sqrt(Math.max(0, semi * (semi - a) * (semi - b) * (semi - c)));
+    const radius = area / semi;
+    return { center, radius };
+}
+
 export function calculatePolygonArea(points: {x: number, y: number}[]): number {
   let area = 0;
   const n = points.length;
@@ -55,6 +76,16 @@ export function calculatePolygonArea(points: {x: number, y: number}[]): number {
     area += points[i].x * points[j].y - points[j].x * points[i].y;
   }
   return Math.abs(area / 2);
+}
+
+export function calculatePolygonPerimeter(points: {x: number, y: number}[]): number {
+  let perimeter = 0;
+  const n = points.length;
+  for (let i = 0; i < n; i++) {
+    const j = (i + 1) % n;
+    perimeter += distance(points[i], points[j]);
+  }
+  return perimeter;
 }
 
 export function calculatePolygonCentroid(points: {x: number, y: number}[]): {x: number, y: number} {

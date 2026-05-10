@@ -1,14 +1,13 @@
 import React, { useState, useRef, useEffect } from 'react';
 import { Stage, Layer, Circle as KonvaCircle, Line as KonvaLine, Text as KonvaText, Group, Arc as KonvaArc, Rect as KonvaRect } from 'react-konva';
 import { Point, Line, Circle, Polygon, Measurement, ToolType, LineType, TextLabel, Group as GroupType } from './types';
-import { generateId, distance, distancePointToLine, distancePointToSegment, distancePointToRay, getNextPointName, calculateAngle, cn, calculatePolygonArea, calculatePolygonCentroid } from './lib/utils';
-import { MousePointer2, CircleDot, Minus, ArrowRightLeft, ArrowUpRight, Target, Equal, Split, Circle as CircleIcon, Hexagon, Trash2, Undo2, Crosshair, Ruler, PieChart, Eraser, Type, MoveDiagonal, Triangle, ArrowDownToLine, FoldVertical, SquareDashed, Grid, X, Palette, ChevronDown, Group as GroupIcon, Ungroup } from 'lucide-react';
+import { generateId, distance, distancePointToLine, distancePointToSegment, distancePointToRay, getNextPointName, calculateAngle, cn, calculatePolygonArea, calculatePolygonCentroid, getIncircle, calculatePolygonPerimeter } from './lib/utils';
+import { MousePointer2, CircleDot, Minus, ArrowRightLeft, ArrowUpRight, Target, Equal, Split, Circle as CircleIcon, Hexagon, Trash2, Undo2, Crosshair, Ruler, PieChart, Eraser, Type, MoveDiagonal, Triangle, ArrowDownToLine, FoldVertical, SquareDashed, Grid, X, Palette, ChevronDown, Group as GroupIcon, Ungroup, Settings, AlignStartVertical, AlignCenterVertical, AlignEndVertical, AlignStartHorizontal, AlignCenterHorizontal, AlignEndHorizontal, Route } from 'lucide-react';
 
 const SNAP_DISTANCE = 15;
-const GRID_SIZE = 20;
 
 export default function App() {
-  const [points, setPoints] = useState<Point[]>([]);
+  const [points, setPoints] = useState<Point[]>([{ id: generateId(), name: 'A', x: 400, y: 300, type: 'free' }]);
   const [lines, setLines] = useState<Line[]>([]);
   const [circles, setCircles] = useState<Circle[]>([]);
   const [polygons, setPolygons] = useState<Polygon[]>([]);
@@ -22,6 +21,9 @@ export default function App() {
   const [history, setHistory] = useState<any[]>([]);
   const [isRulerVisible, setIsRulerVisible] = useState(false);
   const [snapToGrid, setSnapToGrid] = useState(false);
+  const [gridSize, setGridSize] = useState(20);
+  const [gridColor, setGridColor] = useState('#cbd5e1');
+  const [showGridSettings, setShowGridSettings] = useState(false);
   const [rulerState, setRulerState] = useState({ x: 400, y: 300, rotation: 0, length: 600 });
   const [hoveredId, setHoveredId] = useState<string | null>(null);
   const [selectedObjectIds, setSelectedObjectIds] = useState<string[]>([]);
@@ -103,31 +105,38 @@ export default function App() {
     if (p.type === 'free') evalPoints[p.id] = { x: p.x!, y: p.y! };
   });
 
-  let ptsChanged = true;
-  let ptsPasses = 0;
-  while(ptsChanged && ptsPasses < 5) {
-      ptsChanged = false;
+  const evalLines: Record<string, {p1: {x:number, y:number}, dx: number, dy: number, type: LineType, p2?: {x:number, y:number}}> = {};
+
+  let globalChanged = true;
+  let globalPasses = 0;
+  while(globalChanged && globalPasses < 10) {
+      globalChanged = false;
+
       points.forEach(p => {
           if (evalPoints[p.id]) return;
           if (p.type === 'midpoint') {
               const p1 = evalPoints[p.p1!];
               const p2 = evalPoints[p.p2!];
-              if (p1 && p2) { evalPoints[p.id] = { x: (p1.x + p2.x)/2, y: (p1.y + p2.y)/2 }; ptsChanged = true; }
+              if (p1 && p2) { evalPoints[p.id] = { x: (p1.x + p2.x)/2, y: (p1.y + p2.y)/2 }; globalChanged = true; }
           } else if (p.type === 'centroid') {
               const p1 = evalPoints[p.p1!];
               const p2 = evalPoints[p.p2!];
               const p3 = evalPoints[p.p3!];
-              if (p1 && p2 && p3) { evalPoints[p.id] = { x: (p1.x + p2.x + p3.x)/3, y: (p1.y + p2.y + p3.y)/3 }; ptsChanged = true; }
+              if (p1 && p2 && p3) { evalPoints[p.id] = { x: (p1.x + p2.x + p3.x)/3, y: (p1.y + p2.y + p3.y)/3 }; globalChanged = true; }
+          } else if (p.type === 'intersection') {
+              const l1 = evalLines[p.line1!];
+              const l2 = evalLines[p.line2!];
+              if (l1 && l2) {
+                  const det = l1.dx * l2.dy - l1.dy * l2.dx;
+                  if (Math.abs(det) > 1e-6) {
+                      const u = ((l2.p1.x - l1.p1.x) * l2.dy - (l2.p1.y - l1.p1.y) * l2.dx) / det;
+                      evalPoints[p.id] = { x: l1.p1.x + u * l1.dx, y: l1.p1.y + u * l1.dy };
+                      globalChanged = true;
+                  }
+              }
           }
       });
-      ptsPasses++;
-  }
 
-  const evalLines: Record<string, {p1: {x:number, y:number}, dx: number, dy: number, type: LineType, p2?: {x:number, y:number}}> = {};
-  let changed = true;
-  let passes = 0;
-  while(changed && passes < 5) {
-      changed = false;
       lines.forEach(l => {
           if (evalLines[l.id]) return;
           if (l.type === 'segment' || l.type === 'line' || l.type === 'ray') {
@@ -135,7 +144,7 @@ export default function App() {
               const p2 = evalPoints[l.p2!];
               if (p1 && p2) {
                   evalLines[l.id] = { p1, p2, dx: p2.x - p1.x, dy: p2.y - p1.y, type: l.type };
-                  changed = true;
+                  globalChanged = true;
               }
           } else if (l.type === 'perpendicular' || l.type === 'parallel') {
               const pt = evalPoints[l.point!];
@@ -146,9 +155,21 @@ export default function App() {
                   if (l.type === 'perpendicular') {
                       dx = -base.dy;
                       dy = base.dx;
+                      if (l.trimmed) {
+                          const dxB = base.dx, dyB = base.dy, pB = base.p1;
+                          const det = dx * dyB - dy * dxB;
+                          if (Math.abs(det) > 1e-6) {
+                              const u = ((pB.x - pt.x) * dyB - (pB.y - pt.y) * dxB) / det;
+                              const ix = pt.x + u * dx;
+                              const iy = pt.y + u * dy;
+                              evalLines[l.id] = { p1: pt, p2: {x: ix, y: iy}, dx, dy, type: 'segment' };
+                              globalChanged = true;
+                              return;
+                          }
+                      }
                   }
                   evalLines[l.id] = { p1: pt, dx, dy, type: 'line' };
-                  changed = true;
+                  globalChanged = true;
               }
           } else if (l.type === 'bisector') {
               const p1 = evalPoints[l.p1!];
@@ -159,9 +180,30 @@ export default function App() {
                   const a2 = Math.atan2(p3.y - p2.y, p3.x - p2.x);
                   let diff = a2 - a1;
                   if (diff < 0) diff += 2 * Math.PI;
-                  const bisectAngle = a1 + diff / 2;
-                  evalLines[l.id] = { p1: p2, dx: Math.cos(bisectAngle), dy: Math.sin(bisectAngle), type: 'line' };
-                  changed = true;
+                  // Handle interior vs exterior by choosing the correct bisector
+                  // If difference > PI, the interior angle bisector is actually rotated by PI
+                  let bisectAngle = a1 + diff / 2;
+                  if (diff > Math.PI) {
+                     bisectAngle += Math.PI;
+                  }
+                  const dx = Math.cos(bisectAngle);
+                  const dy = Math.sin(bisectAngle);
+                  
+                  if (l.trimmed) {
+                      const dxB = p3.x - p1.x, dyB = p3.y - p1.y, pB = p1;
+                      const det = dx * dyB - dy * dxB;
+                      if (Math.abs(det) > 1e-6) {
+                          const u = ((pB.x - p2.x) * dyB - (pB.y - p2.y) * dxB) / det;
+                          const ix = p2.x + u * dx;
+                          const iy = p2.y + u * dy;
+                          evalLines[l.id] = { p1: p2, p2: {x: ix, y: iy}, dx, dy, type: 'segment' };
+                          globalChanged = true;
+                          return;
+                      }
+                  }
+                  
+                  evalLines[l.id] = { p1: p2, dx, dy, type: 'ray' };
+                  globalChanged = true;
               }
           } else if (l.type === 'median') {
               const p1 = evalPoints[l.p1!];
@@ -171,7 +213,7 @@ export default function App() {
                   const midX = (p2.x + p3.x) / 2;
                   const midY = (p2.y + p3.y) / 2;
                   evalLines[l.id] = { p1, dx: midX - p1.x, dy: midY - p1.y, type: 'line' };
-                  changed = true;
+                  globalChanged = true;
               }
           } else if (l.type === 'perp_bisector') {
               const p1 = evalPoints[l.p1!];
@@ -180,18 +222,59 @@ export default function App() {
                   const midX = (p1.x + p2.x) / 2;
                   const midY = (p1.y + p2.y) / 2;
                   evalLines[l.id] = { p1: {x: midX, y: midY}, dx: p1.y - p2.y, dy: p2.x - p1.x, type: 'line' };
-                  changed = true;
+                  globalChanged = true;
+              }
+          } else if (l.type === 'tangent') {
+              const pt = evalPoints[l.point!];
+              const c = circles.find(circ => circ.id === l.circle!);
+              if (pt && c) {
+                  let center: {x: number, y: number} | undefined;
+                  let radius = 0;
+                  if (c.type === 'inscribed') {
+                      const poly = polygons.find(p => p.id === c.polygonId);
+                      if (poly) {
+                          const pts = poly.points.map(pid => evalPoints[pid]).filter(Boolean);
+                          if (pts.length >= 3) {
+                              const incircle = getIncircle(pts as any);
+                              if (incircle) {
+                                  center = incircle.center;
+                                  radius = incircle.radius;
+                              }
+                          }
+                      }
+                  } else {
+                      center = evalPoints[c.center!];
+                      const p2 = evalPoints[c.p2!];
+                      if (center && p2) {
+                          radius = distance(center, p2);
+                      }
+                  }
+
+                  if (center && radius > 0) {
+                      const dist = distance(pt, center);
+                      // floating point tolerance for equality
+                      if (dist >= radius - 1e-6) {
+                          const angleToCenter = Math.atan2(center.y - pt.y, center.x - pt.x);
+                          const safeDist = Math.max(dist, radius); // prevent NaN if dist is very slightly less than radius due to floating point
+                          const theta = Math.asin(radius / safeDist);
+                          const dirAngle = l.tangentIndex === 0 ? angleToCenter + theta : angleToCenter - theta;
+                          const dx = Math.cos(dirAngle);
+                          const dy = Math.sin(dirAngle);
+                          evalLines[l.id] = { p1: pt, dx, dy, type: 'line' };
+                          globalChanged = true;
+                      }
+                  }
               }
           }
       });
-      passes++;
+      globalPasses++;
   }
 
   const getSnappedPos = (pos: { x: number, y: number }) => {
     if (!snapToGrid) return pos;
     return {
-      x: Math.round(pos.x / GRID_SIZE) * GRID_SIZE,
-      y: Math.round(pos.y / GRID_SIZE) * GRID_SIZE
+      x: Math.round(pos.x / gridSize) * gridSize,
+      y: Math.round(pos.y / gridSize) * gridSize
     };
   };
 
@@ -235,10 +318,27 @@ export default function App() {
     if (!clickedPointId && !clickedLineId) {
         let minCircDist = SNAP_DISTANCE;
         for (const c of circles) {
-            const center = evalPoints[c.center];
-            const p2 = evalPoints[c.p2];
-            if (!center || !p2) continue;
-            const radius = distance(center, p2);
+            let center: {x: number, y: number} | undefined;
+            let radius = 0;
+            if (c.type === 'inscribed') {
+                const poly = polygons.find(p => p.id === c.polygonId);
+                if (!poly) continue;
+                const pts = poly.points.map(pid => evalPoints[pid]).filter(Boolean);
+                if (pts.length < 3) continue;
+                const incircle = getIncircle(pts as any);
+                if (!incircle) continue;
+                center = incircle.center;
+                radius = incircle.radius;
+            } else {
+                center = evalPoints[c.center!];
+                const p2 = evalPoints[c.p2!];
+                if (center && p2) {
+                    radius = distance(center, p2);
+                } else {
+                    continue;
+                }
+            }
+            if (!center) continue;
             const d = Math.abs(distance(pos, center) - radius);
             if (d < minCircDist) {
                 minCircDist = d;
@@ -260,15 +360,24 @@ export default function App() {
     }
 
     let clickedPolygonId: string | null = null;
+    let clickedMeasurementId: string | null = null;
     if (!clickedPointId && !clickedLineId && !clickedCircleId && !clickedTextId) {
         const clickedOn = e.target;
         if (clickedOn.name() === 'polygon') {
             clickedPolygonId = clickedOn.id();
+        } else if (clickedOn.name() === 'measurement_label') {
+            clickedMeasurementId = clickedOn.id();
+        } else {
+            // also check parent group
+            const parent = clickedOn.parent;
+            if (parent && parent.name() === 'measurement_label') {
+                clickedMeasurementId = parent.id();
+            }
         }
     }
 
     if (activeTool === 'select') {
-        const clickedId = clickedPointId || clickedLineId || clickedCircleId || clickedTextId || clickedPolygonId;
+        const clickedId = clickedPointId || clickedLineId || clickedCircleId || clickedTextId || clickedPolygonId || clickedMeasurementId;
         
         if (clickedId) {
             const group = groups.find(g => g.objectIds.includes(clickedId));
@@ -315,62 +424,63 @@ export default function App() {
             if (selectedObjectIds.includes(clickedPolygonId)) setSelectedObjectIds(selectedObjectIds.filter(id => id !== clickedPolygonId));
             return;
         }
+        if (clickedMeasurementId) {
+            doSaveHistory();
+            setMeasurements(prev => prev.filter(m => m.id !== clickedMeasurementId));
+            if (selectedObjectIds.includes(clickedMeasurementId)) setSelectedObjectIds(selectedObjectIds.filter(id => id !== clickedMeasurementId));
+            return;
+        }
         if (clickedPointId || clickedLineId || clickedCircleId || clickedTextId) {
             doSaveHistory();
-            if (clickedPointId) {
-                const deletedPts = new Set<string>([clickedPointId]);
-                let changed = true;
-                while (changed) {
-                    changed = false;
-                    for (const p of points) {
-                        if (p.type === 'midpoint' && !deletedPts.has(p.id)) {
-                            if (deletedPts.has(p.p1!) || deletedPts.has(p.p2!)) {
-                                deletedPts.add(p.id);
-                                changed = true;
-                            }
-                        } else if (p.type === 'centroid' && !deletedPts.has(p.id)) {
-                            if (deletedPts.has(p.p1!) || deletedPts.has(p.p2!) || deletedPts.has(p.p3!)) {
-                                deletedPts.add(p.id);
-                                changed = true;
-                            }
-                        }
-                    }
+            const deletedPts = new Set<string>(clickedPointId ? [clickedPointId] : []);
+            const deletedLines = new Set<string>(clickedLineId ? [clickedLineId] : []);
+            const deletedCircles = new Set<string>(clickedCircleId ? [clickedCircleId] : []);
+            const deletedTexts = new Set<string>(clickedTextId ? [clickedTextId] : []);
+            const deletedPolys = new Set<string>();
+
+            let changed = true;
+            while (changed) {
+                changed = false;
+                for (const p of points) {
+                    if (deletedPts.has(p.id)) continue;
+                    if (p.type === 'midpoint' && (deletedPts.has(p.p1!) || deletedPts.has(p.p2!))) { deletedPts.add(p.id); changed = true; }
+                    else if (p.type === 'centroid' && (deletedPts.has(p.p1!) || deletedPts.has(p.p2!) || deletedPts.has(p.p3!))) { deletedPts.add(p.id); changed = true; }
+                    else if (p.type === 'intersection' && (deletedLines.has(p.line1!) || deletedLines.has(p.line2!))) { deletedPts.add(p.id); changed = true; }
                 }
-                setPoints(prev => prev.filter(p => !deletedPts.has(p.id)));
-                setLines(prev => prev.filter(l => !deletedPts.has(l.p1!) && !deletedPts.has(l.p2!) && !deletedPts.has(l.p3!) && !deletedPts.has(l.point!)));
-                setCircles(prev => prev.filter(c => !deletedPts.has(c.center) && !deletedPts.has(c.p2)));
-                const deletedPolys = new Set(polygons.filter(poly => poly.points.some(pt => deletedPts.has(pt))).map(p => p.id));
-                setPolygons(prev => prev.filter(poly => !deletedPolys.has(poly.id)));
-                setMeasurements(prev => prev.filter(m => {
-                    if (m.type === 'area') return !deletedPolys.has(m.polygonId);
-                    if (m.type === 'distance') return !deletedPts.has(m.p1) && !deletedPts.has(m.p2);
-                    if (m.type === 'angle') return !deletedPts.has(m.p1) && !deletedPts.has(m.p2) && !deletedPts.has(m.p3);
-                    return true;
-                }));
-                setSelectedObjectIds(selectedObjectIds.filter(id => !deletedPts.has(id)));
-            } else if (clickedLineId) {
-                const deletedLines = new Set<string>([clickedLineId]);
-                let changed = true;
-                while (changed) {
-                    changed = false;
-                    for (const l of lines) {
-                        if ((l.type === 'parallel' || l.type === 'perpendicular') && !deletedLines.has(l.id)) {
-                            if (deletedLines.has(l.baseLine!)) {
-                                deletedLines.add(l.id);
-                                changed = true;
-                            }
-                        }
-                    }
+                for (const l of lines) {
+                    if (deletedLines.has(l.id)) continue;
+                    if (deletedPts.has(l.p1!) || deletedPts.has(l.p2!) || deletedPts.has(l.p3!) || deletedPts.has(l.point!)) { deletedLines.add(l.id); changed = true; }
+                    else if ((l.type === 'parallel' || l.type === 'perpendicular') && deletedLines.has(l.baseLine!)) { deletedLines.add(l.id); changed = true; }
+                    else if (l.type === 'tangent' && deletedCircles.has(l.circle!)) { deletedLines.add(l.id); changed = true; }
                 }
-                setLines(prev => prev.filter(l => !deletedLines.has(l.id)));
-                setSelectedObjectIds(selectedObjectIds.filter(id => !deletedLines.has(id)));
-            } else if (clickedCircleId) {
-                setCircles(prev => prev.filter(c => c.id !== clickedCircleId));
-                if (selectedObjectIds.includes(clickedCircleId)) setSelectedObjectIds(selectedObjectIds.filter(id => id !== clickedCircleId));
-            } else if (clickedTextId) {
-                setTextLabels(prev => prev.filter(t => t.id !== clickedTextId));
-                if (selectedObjectIds.includes(clickedTextId)) setSelectedObjectIds(selectedObjectIds.filter(id => id !== clickedTextId));
+                for (const poly of polygons) {
+                    if (deletedPolys.has(poly.id)) continue;
+                    if (poly.points.some(pt => deletedPts.has(pt))) { deletedPolys.add(poly.id); changed = true; }
+                }
+                for (const c of circles) {
+                    if (deletedCircles.has(c.id)) continue;
+                    if (c.type === 'inscribed' && deletedPolys.has(c.polygonId)) { deletedCircles.add(c.id); changed = true; }
+                    else if (c.type !== 'inscribed' && (deletedPts.has(c.center) || deletedPts.has(c.p2))) { deletedCircles.add(c.id); changed = true; }
+                }
             }
+
+            setPoints(prev => prev.filter(p => !deletedPts.has(p.id)));
+            setLines(prev => prev.filter(l => !deletedLines.has(l.id)));
+            setCircles(prev => prev.filter(c => !deletedCircles.has(c.id)));
+            setTextLabels(prev => prev.filter(t => !deletedTexts.has(t.id)));
+            setPolygons(prev => prev.filter(poly => !deletedPolys.has(poly.id)));
+
+            setMeasurements(prev => prev.filter(m => {
+                if (m.type === 'area') return !deletedPolys.has(m.polygonId);
+                if (m.type === 'perimeter') return !m.points.some(pt => deletedPts.has(pt));
+                if (m.type === 'distance') return !deletedPts.has(m.p1) && !deletedPts.has(m.p2);
+                if (m.type === 'angle') return !deletedPts.has(m.p1) && !deletedPts.has(m.p2) && !deletedPts.has(m.p3);
+                return true;
+            }));
+
+            setSelectedObjectIds(selectedObjectIds.filter(id => 
+                !deletedPts.has(id) && !deletedLines.has(id) && !deletedCircles.has(id) && !deletedPolys.has(id) && !deletedTexts.has(id)
+            ));
         }
         return;
     } else if (activeTool === 'point') {
@@ -448,6 +558,17 @@ export default function App() {
         } else {
             setSelectedIds(newSel);
         }
+    } else if (activeTool === 'intersection') {
+        if (clickedLineId && !selectedIds.includes(clickedLineId)) {
+            const newSel = [...selectedIds, clickedLineId];
+            if (newSel.length === 2) {
+                doSaveHistory();
+                setPoints(prev => [...prev, { id: generateId(), type: 'intersection', line1: newSel[0], line2: newSel[1], name: getNextPointName(points.map(p=>p.name)) }]);
+                setSelectedIds([]);
+            } else {
+                setSelectedIds(newSel);
+            }
+        }
     } else if (activeTool === 'circle') {
         const pId = getOrCreatePoint();
         if (selectedIds.length === 0) {
@@ -456,6 +577,37 @@ export default function App() {
             doSaveHistory();
             setCircles(prev => [...prev, { id: generateId(), center: selectedIds[0], p2: pId }]);
             setSelectedIds([]);
+        }
+    } else if (activeTool === 'inscribed_circle') {
+        const clickedOn = e.target;
+        if (clickedOn.name() === 'polygon') {
+            const polyId = clickedOn.id();
+            if (!circles.some(c => c.type === 'inscribed' && c.polygonId === polyId)) {
+                doSaveHistory();
+                setCircles(prev => [...prev, { id: generateId(), type: 'inscribed', polygonId: polyId }]);
+            }
+        }
+        return;
+    } else if (activeTool === 'tangent') {
+        if (clickedPointId && !selectedIds.find(id => points.find(p => p.id === id))) {
+            const newSel = [...selectedIds, clickedPointId];
+            if (newSel.length === 2) {
+                doSaveHistory();
+                createTangent(newSel);
+            } else setSelectedIds(newSel);
+        } else if (clickedCircleId && !selectedIds.find(id => circles.find(c => c.id === id))) {
+            const newSel = [...selectedIds, clickedCircleId];
+            if (newSel.length === 2) {
+                doSaveHistory();
+                createTangent(newSel);
+            } else setSelectedIds(newSel);
+        } else if (!clickedPointId && !clickedCircleId && !clickedLineId && !clickedPolygonId && !clickedMeasurementId && !clickedTextId) {
+            const pId = getOrCreatePoint();
+            const newSel = [...selectedIds, pId];
+            if (newSel.length === 2) {
+                doSaveHistory();
+                createTangent(newSel);
+            } else setSelectedIds(newSel);
         }
     } else if (activeTool === 'measure_area') {
         const clickedOn = e.target;
@@ -467,6 +619,15 @@ export default function App() {
             }
         }
         return;
+    } else if (activeTool === 'measure_perimeter') {
+        const pId = getOrCreatePoint();
+        if (selectedIds.length >= 2 && pId === selectedIds[0]) {
+            doSaveHistory();
+            setMeasurements(prev => [...prev, { id: generateId(), type: 'perimeter', points: selectedIds }]);
+            setSelectedIds([]);
+        } else if (selectedIds[selectedIds.length - 1] !== pId && pId !== selectedIds[0]) {
+            setSelectedIds([...selectedIds, pId]);
+        }
     } else if (activeTool === 'polygon') {
         const pId = getOrCreatePoint();
         if (selectedIds.length >= 2 && pId === selectedIds[0]) {
@@ -514,6 +675,19 @@ export default function App() {
       setSelectedIds([]);
   };
 
+  const createTangent = (sel: string[]) => {
+      const ptId = sel.find(id => points.find(p => p.id === id));
+      const circleId = sel.find(id => circles.find(c => c.id === id));
+      if (ptId && circleId) {
+          setLines(prev => [
+            ...prev,
+            { id: generateId(), type: 'tangent', point: ptId, circle: circleId, tangentIndex: 0 },
+            { id: generateId(), type: 'tangent', point: ptId, circle: circleId, tangentIndex: 1 }
+          ]);
+      }
+      setSelectedIds([]);
+  };
+
   const handleMouseMove = (e: any) => {
     const stage = e.target.getStage();
     const pos = stage.getPointerPosition();
@@ -533,7 +707,14 @@ export default function App() {
     if (activeTool === 'select') {
       saveHistory();
       
-      const idsToMove = selectedObjectIds.includes(id) ? selectedObjectIds : [id];
+      let idsToMove = selectedObjectIds.includes(id) ? selectedObjectIds : [id];
+      if (!selectedObjectIds.includes(id)) {
+        const group = groups.find(g => g.objectIds.includes(id));
+        if (group) {
+          idsToMove = [...group.objectIds];
+        }
+        setSelectedObjectIds(idsToMove);
+      }
       
       const initialPoints: Record<string, {x: number, y: number}> = {};
       const initialTextPositions: Record<string, {x: number, y: number}> = {};
@@ -549,9 +730,9 @@ export default function App() {
           if (points.find(p => p.id === ln.p2!)?.type === 'free') initialPoints[ln.p2!] = { ...evalPoints[ln.p2!] };
         }
         const circ = circles.find(c => c.id === objId);
-        if (circ) {
-          if (points.find(p => p.id === circ.center)?.type === 'free') initialPoints[circ.center] = { ...evalPoints[circ.center] };
-          if (points.find(p => p.id === circ.p2)?.type === 'free') initialPoints[circ.p2] = { ...evalPoints[circ.p2] };
+        if (circ && circ.type !== 'inscribed') {
+          if (points.find(p => p.id === circ.center!)?.type === 'free') initialPoints[circ.center!] = { ...evalPoints[circ.center!] };
+          if (points.find(p => p.id === circ.p2!)?.type === 'free') initialPoints[circ.p2!] = { ...evalPoints[circ.p2!] };
         }
         const poly = polygons.find(p => p.id === objId);
         if (poly) {
@@ -630,7 +811,7 @@ export default function App() {
       objectIds: [...selectedObjectIds]
     };
     setGroups(prev => [...prev, newGroup]);
-    setSelectedObjectIds([]);
+    // Giữ nguyên selection sau khi nhóm
   };
 
   const handleUngroup = () => {
@@ -686,12 +867,18 @@ export default function App() {
       case 'midpoint': return step === 0 ? 'Chọn điểm thứ 1' : 'Chọn điểm thứ 2';
       case 'perp_bisector': return step === 0 ? 'Chọn điểm thứ 1' : 'Chọn điểm thứ 2';
       case 'circle': return step === 0 ? 'Chọn tâm' : 'Chọn điểm trên đường tròn';
+      case 'inscribed_circle': return 'Nhấn vào một đa giác để nội tiếp đường tròn';
       case 'bisector': return step === 0 ? 'Chọn điểm thứ 1' : step === 1 ? 'Chọn đỉnh' : 'Chọn điểm thứ 3';
       case 'measure_angle': return step === 0 ? 'Chọn điểm thứ 1' : step === 1 ? 'Chọn đỉnh' : 'Chọn điểm thứ 3';
       case 'measure_area': return 'Nhấn vào một đa giác để đo diện tích';
+      case 'measure_perimeter': return step === 0 ? 'Chọn đỉnh thứ 1' : step === 1 ? 'Chọn đỉnh thứ 2' : 'Chọn đỉnh tiếp theo hoặc nhấn đỉnh đầu để đóng';
       case 'centroid': return step === 0 ? 'Chọn đỉnh thứ 1' : step === 1 ? 'Chọn đỉnh thứ 2' : 'Chọn đỉnh thứ 3';
       case 'median': return step === 0 ? 'Chọn đỉnh' : step === 1 ? 'Chọn điểm đáy thứ 1' : 'Chọn điểm đáy thứ 2';
       case 'polygon': return step === 0 ? 'Chọn đỉnh thứ 1' : step === 1 ? 'Chọn đỉnh thứ 2' : 'Chọn đỉnh tiếp theo hoặc nhấn đỉnh đầu để đóng';
+      case 'tangent':
+        if (step === 0) return 'Chọn một điểm hoặc một đường tròn';
+        const isPointSelectedTangent = points.some(p => p.id === selectedIds[0]);
+        return isPointSelectedTangent ? 'Chọn một đường tròn' : 'Chọn một điểm';
       case 'perpendicular':
       case 'parallel':
         if (step === 0) return 'Chọn một điểm hoặc một đường thẳng';
@@ -720,6 +907,7 @@ export default function App() {
         { id: 'point', icon: CircleDot, label: 'Điểm' },
         { id: 'midpoint', icon: Target, label: 'Trung điểm' },
         { id: 'centroid', icon: Triangle, label: 'Trọng tâm' },
+        { id: 'intersection', icon: X, label: 'Giao điểm' },
       ]
     },
     {
@@ -739,9 +927,10 @@ export default function App() {
       tools: [
         { id: 'perpendicular', icon: Crosshair, label: 'Vuông góc' },
         { id: 'parallel', icon: Equal, label: 'Song song' },
-        { id: 'bisector', icon: Split, label: 'Phân giác' },
+        { id: 'bisector', icon: Split, label: 'Phân giác góc' },
         { id: 'perp_bisector', icon: FoldVertical, label: 'Trung trực' },
         { id: 'median', icon: ArrowDownToLine, label: 'Trung tuyến' },
+        { id: 'tangent', icon: ArrowUpRight, label: 'Tiếp tuyến' },
       ]
     },
     {
@@ -750,6 +939,7 @@ export default function App() {
       label: 'Hình khối',
       tools: [
         { id: 'circle', icon: CircleIcon, label: 'Đường tròn' },
+        { id: 'inscribed_circle', icon: CircleIcon, label: 'Nội tiếp' },
         { id: 'polygon', icon: Hexagon, label: 'Đa giác' },
       ]
     },
@@ -761,9 +951,129 @@ export default function App() {
         { id: 'measure_distance', icon: MoveDiagonal, label: 'Khoảng cách' },
         { id: 'measure_angle', icon: PieChart, label: 'Góc' },
         { id: 'measure_area', icon: SquareDashed, label: 'Diện tích' },
+        { id: 'measure_perimeter', icon: Route, label: 'Chu vi' },
       ]
     }
   ];
+
+  const handleAlign = (type: 'left' | 'center-x' | 'right' | 'top' | 'center-y' | 'bottom') => {
+    saveHistory();
+    const objectBBoxes: any[] = [];
+    
+    selectedObjectIds.forEach(id => {
+        let minX = Infinity, minY = Infinity, maxX = -Infinity, maxY = -Infinity;
+        const addPt = (p: {x:number, y:number}) => {
+            if (p.x < minX) minX = p.x;
+            if (p.x > maxX) maxX = p.x;
+            if (p.y < minY) minY = p.y;
+            if (p.y > maxY) maxY = p.y;
+        };
+        
+        const shiftFreeIds = new Set<string>();
+        const shiftTextIds = new Set<string>();
+        
+        const pt = points.find(p => p.id === id);
+        if (pt && evalPoints[pt.id]) {
+            addPt(evalPoints[pt.id]);
+            if (pt.type === 'free') shiftFreeIds.add(id);
+        }
+        
+        const txt = textLabels.find(t => t.id === id);
+        if (txt) {
+            addPt({x: txt.x, y: txt.y});
+            shiftTextIds.add(id);
+        }
+        
+        const ln = lines.find(l => l.id === id);
+        if (ln && evalLines[ln.id]) {
+            addPt(evalLines[ln.id].p1);
+            if (evalLines[ln.id].p2) addPt(evalLines[ln.id].p2!);
+            if (points.find(p=>p.id===ln.p1!)?.type === 'free') shiftFreeIds.add(ln.p1!);
+            if (points.find(p=>p.id===ln.p2!)?.type === 'free') shiftFreeIds.add(ln.p2!);
+        }
+        
+        const c = circles.find(c => c.id === id);
+        if (c && c.type !== 'inscribed') {
+            const cp = evalPoints[c.center!];
+            const p2 = evalPoints[c.p2!];
+            if (cp && p2) {
+                const r = distance(cp, p2);
+                addPt({x: cp.x - r, y: cp.y - r});
+                addPt({x: cp.x + r, y: cp.y + r});
+                if (points.find(p=>p.id===c.center!)?.type === 'free') shiftFreeIds.add(c.center!);
+                if (points.find(p=>p.id===c.p2!)?.type === 'free') shiftFreeIds.add(c.p2!);
+            }
+        }
+        
+        const poly = polygons.find(p => p.id === id);
+        if (poly) {
+           poly.points.forEach(pid => {
+               if (evalPoints[pid]) addPt(evalPoints[pid]);
+               if (points.find(p=>p.id===pid)?.type === 'free') shiftFreeIds.add(pid);
+           });
+        }
+        
+        if (minX !== Infinity) {
+            objectBBoxes.push({id, minX, maxX, minY, maxY, shiftFreeIds, shiftTextIds});
+        }
+    });
+
+    if (objectBBoxes.length < 2) return;
+    
+    const globalMinX = Math.min(...objectBBoxes.map(b => b.minX));
+    const globalMaxX = Math.max(...objectBBoxes.map(b => b.maxX));
+    const globalMinY = Math.min(...objectBBoxes.map(b => b.minY));
+    const globalMaxY = Math.max(...objectBBoxes.map(b => b.maxY));
+    const globalCenterX = (globalMinX + globalMaxX) / 2;
+    const globalCenterY = (globalMinY + globalMaxY) / 2;
+    
+    const shiftedPointIds = new Set<string>();
+    const shiftedTextIds = new Set<string>();
+
+    const pointDeltas: Record<string, {dx: number, dy: number}> = {};
+    const textDeltas: Record<string, {dx: number, dy: number}> = {};
+
+    objectBBoxes.forEach(box => {
+        let targetX = box.minX;
+        let targetY = box.minY;
+        if (type === 'left') targetX = globalMinX;
+        else if (type === 'right') targetX = globalMaxX - (box.maxX - box.minX);
+        else if (type === 'center-x') targetX = globalCenterX - (box.maxX - box.minX)/2;
+        else if (type === 'top') targetY = globalMinY;
+        else if (type === 'bottom') targetY = globalMaxY - (box.maxY - box.minY);
+        else if (type === 'center-y') targetY = globalCenterY - (box.maxY - box.minY)/2;
+        
+        const dx = (type === 'left' || type === 'right' || type === 'center-x') ? targetX - box.minX : 0;
+        const dy = (type === 'top' || type === 'bottom' || type === 'center-y') ? targetY - box.minY : 0;
+        
+        box.shiftFreeIds.forEach((pid: string) => {
+            if (!shiftedPointIds.has(pid)) {
+                pointDeltas[pid] = {dx, dy};
+                shiftedPointIds.add(pid);
+            }
+        });
+        box.shiftTextIds.forEach((tid: string) => {
+            if (!shiftedTextIds.has(tid)) {
+                textDeltas[tid] = {dx, dy};
+                shiftedTextIds.add(tid);
+            }
+        });
+    });
+
+    setPoints(prev => prev.map(p => {
+        if (pointDeltas[p.id] && p.type === 'free') {
+            return { ...p, x: p.x + pointDeltas[p.id].dx, y: p.y + pointDeltas[p.id].dy };
+        }
+        return p;
+    }));
+    
+    setTextLabels(prev => prev.map(t => {
+        if (textDeltas[t.id]) {
+            return { ...t, x: t.x + textDeltas[t.id].dx, y: t.y + textDeltas[t.id].dy };
+        }
+        return t;
+    }));
+  };
 
   const renderPropertiesPanel = () => {
     if (selectedObjectIds.length === 0) return null;
@@ -792,6 +1102,19 @@ export default function App() {
                     style={{ backgroundColor: c }}
                   />
                 ))}
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-2 border-t border-slate-200 pt-3 mt-1">
+              <span className="text-slate-500">Căn lề:</span>
+              <div className="flex gap-2">
+                <button onClick={() => handleAlign('left')} title="Căn trái" className="p-1.5 rounded bg-slate-100 hover:bg-slate-200"><AlignStartVertical className="w-4 h-4" /></button>
+                <button onClick={() => handleAlign('center-x')} title="Căn giữa dọc" className="p-1.5 rounded bg-slate-100 hover:bg-slate-200"><AlignCenterVertical className="w-4 h-4" /></button>
+                <button onClick={() => handleAlign('right')} title="Căn phải" className="p-1.5 rounded bg-slate-100 hover:bg-slate-200"><AlignEndVertical className="w-4 h-4" /></button>
+                <div className="w-px bg-slate-300 mx-1"></div>
+                <button onClick={() => handleAlign('top')} title="Căn trên" className="p-1.5 rounded bg-slate-100 hover:bg-slate-200"><AlignStartHorizontal className="w-4 h-4" /></button>
+                <button onClick={() => handleAlign('center-y')} title="Căn giữa ngang" className="p-1.5 rounded bg-slate-100 hover:bg-slate-200"><AlignCenterHorizontal className="w-4 h-4" /></button>
+                <button onClick={() => handleAlign('bottom')} title="Căn dưới" className="p-1.5 rounded bg-slate-100 hover:bg-slate-200"><AlignEndHorizontal className="w-4 h-4" /></button>
               </div>
             </div>
           </div>
@@ -829,9 +1152,17 @@ export default function App() {
           </div>
           
           {pt && (
-            <div className="flex justify-between items-center">
-              <span className="text-slate-500">Tên:</span>
-              <span className="font-medium text-slate-800">{pt.name}</span>
+            <div className="flex justify-between items-center gap-2">
+              <span className="text-slate-500 min-w-max">Tên:</span>
+              <input
+                type="text"
+                value={pt.name}
+                onChange={(e) => {
+                  setPoints(prev => prev.map(p => p.id === pt.id ? { ...p, name: e.target.value } : p));
+                }}
+                onBlur={() => saveHistory()}
+                className="flex-1 min-w-0 px-2 py-1 border border-slate-300 rounded focus:outline-none focus:border-indigo-500"
+              />
             </div>
           )}
 
@@ -872,28 +1203,70 @@ export default function App() {
             </div>
           )}
 
+          {ln && ['perpendicular', 'bisector'].includes(ln.type) && (
+            <div className="flex justify-between items-center">
+              <span className="text-slate-500">Chỉ hiển thị đoạn cắt:</span>
+              <input
+                type="checkbox"
+                checked={!!ln.trimmed}
+                onChange={(e) => {
+                  saveHistory();
+                  setLines(prev => prev.map(l => l.id === ln.id ? { ...l, trimmed: e.target.checked } : l));
+                }}
+                className="w-4 h-4 cursor-pointer text-indigo-500 focus:ring-indigo-500 rounded border-slate-300"
+              />
+            </div>
+          )}
+
           {/* Radius (Read-only for now) */}
-          {circ && evalPoints[circ.center] && evalPoints[circ.p2] && (
+          {circ && circ.type !== 'inscribed' && evalPoints[circ.center!] && evalPoints[circ.p2!] && (
             <div className="flex justify-between items-center">
               <span className="text-slate-500">Bán kính:</span>
               <span className="font-medium text-slate-800">
-                {distance(evalPoints[circ.center], evalPoints[circ.p2]).toFixed(1)}
+                {distance(evalPoints[circ.center!], evalPoints[circ.p2!]).toFixed(1)}
               </span>
             </div>
+          )}
+          
+          {circ && circ.type === 'inscribed' && (
+             <div className="flex justify-between items-center">
+               <span className="text-slate-500">Bán kính:</span>
+               <span className="font-medium text-slate-800">
+                 {(() => {
+                    const poly = polygons.find(p => p.id === circ.polygonId);
+                    if (!poly) return '0.0';
+                    const pts = poly.points.map(pid => evalPoints[pid]).filter(Boolean);
+                    const incircle = getIncircle(pts as any);
+                    return incircle ? incircle.radius.toFixed(1) : '0.0';
+                 })()}
+               </span>
+             </div>
           )}
 
           {/* Area (Read-only) */}
           {poly && (
-            <div className="flex justify-between items-center">
-              <span className="text-slate-500">Diện tích:</span>
-              <span className="font-medium text-slate-800">
-                {(() => {
-                  const pts = poly.points.map(pid => evalPoints[pid]).filter(Boolean) as {x: number, y: number}[];
-                  if (pts.length < 3) return '0';
-                  return Math.round(calculatePolygonArea(pts));
-                })()}
-              </span>
-            </div>
+            <>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-500">Diện tích:</span>
+                <span className="font-medium text-slate-800">
+                  {(() => {
+                    const pts = poly.points.map(pid => evalPoints[pid]).filter(Boolean) as {x: number, y: number}[];
+                    if (pts.length < 3) return '0';
+                    return Math.round(calculatePolygonArea(pts));
+                  })()}
+                </span>
+              </div>
+              <div className="flex justify-between items-center mt-1">
+                <span className="text-slate-500">Chu vi:</span>
+                <span className="font-medium text-slate-800">
+                  {(() => {
+                    const pts = poly.points.map(pid => evalPoints[pid]).filter(Boolean) as {x: number, y: number}[];
+                    if (pts.length < 3) return '0';
+                    return Math.round(calculatePolygonPerimeter(pts));
+                  })()}
+                </span>
+              </div>
+            </>
           )}
 
           {/* Color Picker */}
@@ -948,12 +1321,15 @@ export default function App() {
           allPts.push(p1, p2);
         }
       } else if (circ) {
-        const c = evalPoints[circ.center];
-        const p2 = evalPoints[circ.p2];
-        if (c && p2) {
-          if (points.find(p => p.id === circ.p2)?.type === 'free') freePointIds.add(circ.p2);
-          const r = distance(c, p2);
-          allPts.push({x: c.x, y: c.y - r}, {x: c.x, y: c.y + r}, {x: c.x - r, y: c.y}, {x: c.x + r, y: c.y});
+        if (circ.type !== 'inscribed') {
+          const c = evalPoints[circ.center!];
+          const p2 = evalPoints[circ.p2!];
+          if (c && p2) {
+            if (points.find(p => p.id === circ.center)?.type === 'free') freePointIds.add(circ.center!);
+            if (points.find(p => p.id === circ.p2)?.type === 'free') freePointIds.add(circ.p2!);
+            const r = distance(c, p2);
+            allPts.push({x: c.x, y: c.y - r}, {x: c.x, y: c.y + r}, {x: c.x - r, y: c.y}, {x: c.x + r, y: c.y});
+          }
         }
       } else if (poly) {
         const pts = poly.points.map(pid => evalPoints[pid]).filter(Boolean) as {x: number, y: number}[];
@@ -995,18 +1371,65 @@ export default function App() {
         </div>
 
         <div className="flex flex-wrap gap-1 bg-slate-100 p-1 rounded-lg">
-          <button
-            onClick={() => setSnapToGrid(!snapToGrid)}
-            className={cn(
-              "p-2 rounded-md flex items-center gap-2 transition-colors",
-              snapToGrid 
-                ? "bg-indigo-100 text-indigo-700 shadow-sm" 
-                : "text-slate-600 hover:bg-slate-200"
+          <div className="relative">
+            <div className="flex bg-slate-100 rounded-md">
+              <button
+                onClick={() => setSnapToGrid(!snapToGrid)}
+                className={cn(
+                  "p-2 rounded-l-md flex items-center gap-2 transition-colors border-r border-slate-300",
+                  snapToGrid 
+                    ? "bg-indigo-100 text-indigo-700 shadow-sm" 
+                    : "text-slate-600 hover:bg-slate-200"
+                )}
+                title="Bật/Tắt Bắt dính lưới"
+              >
+                <Grid className="w-5 h-5" />
+              </button>
+              <button
+                onClick={() => setShowGridSettings(!showGridSettings)}
+                className={cn(
+                  "p-2 rounded-r-md transition-colors",
+                  showGridSettings ? "bg-slate-200 text-slate-800" : "text-slate-600 hover:bg-slate-200"
+                )}
+                title="Cài đặt lưới"
+              >
+                <Settings className="w-4 h-4" />
+              </button>
+            </div>
+            {showGridSettings && (
+              <div className="absolute top-full left-0 mt-2 bg-white border border-slate-200 shadow-lg rounded-md p-3 z-50 w-64">
+                <div className="flex justify-between items-center mb-3">
+                  <h4 className="font-semibold text-sm text-slate-700">Cài đặt lưới</h4>
+                  <button onClick={() => setShowGridSettings(false)} className="text-slate-400 hover:text-slate-600">
+                    <X className="w-4 h-4" />
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Kích thước ô lưới ({gridSize}px)</label>
+                    <input 
+                      type="range" 
+                      min="10" 
+                      max="100" 
+                      step="5" 
+                      value={gridSize} 
+                      onChange={(e) => setGridSize(parseInt(e.target.value))}
+                      className="w-full"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-slate-600 mb-1">Màu lưới</label>
+                    <input 
+                      type="color" 
+                      value={gridColor} 
+                      onChange={(e) => setGridColor(e.target.value)}
+                      className="w-full h-8 rounded cursor-pointer"
+                    />
+                  </div>
+                </div>
+              </div>
             )}
-            title="Bật/Tắt Bắt dính lưới"
-          >
-            <Grid className="w-5 h-5" />
-          </button>
+          </div>
           <div className="w-px bg-slate-300 mx-1 my-2"></div>
           {toolGroups.map((group) => {
             const isActiveGroup = group.tools.some(t => t.id === activeTool);
@@ -1112,8 +1535,8 @@ export default function App() {
           activeTool === 'select' ? 'cursor-default' : (activeTool === 'delete' ? 'cursor-not-allowed' : 'cursor-crosshair')
         )}
         style={{
-          backgroundImage: 'radial-gradient(#cbd5e1 1px, transparent 0)',
-          backgroundSize: '20px 20px'
+          backgroundImage: `radial-gradient(${gridColor} 1px, transparent 0)`,
+          backgroundSize: `${gridSize}px ${gridSize}px`
         }}
       >
         <Stage
@@ -1155,10 +1578,24 @@ export default function App() {
             })}
 
             {circles.map(circle => {
-              const center = evalPoints[circle.center];
-              const p2 = evalPoints[circle.p2];
-              if (!center || !p2) return null;
-              const radius = distance(center, p2);
+              let center = {x: 0, y: 0};
+              let radius = 0;
+              if (circle.type === 'inscribed') {
+                  const poly = polygons.find(p => p.id === circle.polygonId);
+                  if (!poly) return null;
+                  const pts = poly.points.map(pid => evalPoints[pid]).filter(Boolean);
+                  if (pts.length < 3) return null;
+                  const incircle = getIncircle(pts as any);
+                  if (!incircle) return null;
+                  center = incircle.center;
+                  radius = incircle.radius;
+              } else {
+                  const p1 = evalPoints[circle.center!];
+                  const p2 = evalPoints[circle.p2!];
+                  if (!p1 || !p2) return null;
+                  center = p1;
+                  radius = distance(p1, p2);
+              }
               const isSelected = selectedObjectIds.includes(circle.id);
               const color = circle.color || "#0ea5e9";
               return (
@@ -1222,9 +1659,45 @@ export default function App() {
                 const dist = distance(p1, p2).toFixed(1);
                 const midX = (p1.x + p2.x) / 2;
                 const midY = (p1.y + p2.y) / 2;
+                const offsetX = m.labelOffset?.x ?? 0;
+                const offsetY = m.labelOffset?.y ?? 0;
+                const isHovered = hoveredId === m.id;
+                const isSelected = selectedObjectIds.includes(m.id);
+                const color = (isHovered && activeTool === 'delete') ? "#ef4444" : (isSelected ? "#b45309" : "#d97706");
                 return (
-                  <Group key={m.id}>
-                    <KonvaText x={midX + 5} y={midY + 5} text={dist} fill="#d97706" fontSize={16} fontStyle="bold" />
+                  <Group key={m.id} id={m.id} name="measurement_label"
+                     onMouseEnter={() => setHoveredId(m.id)}
+                     onMouseLeave={() => setHoveredId(null)}>
+                    <KonvaText 
+                      x={midX + 5 + offsetX} 
+                      y={midY + 5 + offsetY} 
+                      text={dist} 
+                      fill={color} 
+                      fontSize={16} 
+                      fontStyle="bold" 
+                      draggable={activeTool === 'select'}
+                      onDragStart={(e) => {
+                         if (activeTool === 'select') {
+                             saveHistory();
+                             e.cancelBubble = true;
+                         }
+                      }}
+                      onDragMove={(e) => {
+                         if (activeTool === 'select') {
+                             const nx = e.target.x() - (midX + 5);
+                             const ny = e.target.y() - (midY + 5);
+                             setMeasurements(prev => prev.map(oldM => oldM.id === m.id ? { ...oldM, labelOffset: { x: nx, y: ny } } : oldM));
+                         }
+                      }}
+                      onMouseEnter={(e) => {
+                         const container = e.target.getStage()?.container();
+                         if (container && activeTool === 'select') container.style.cursor = 'move';
+                      }}
+                      onMouseLeave={(e) => {
+                         const container = e.target.getStage()?.container();
+                         if (container) container.style.cursor = activeTool === 'select' ? 'default' : 'crosshair';
+                      }}
+                    />
                   </Group>
                 );
               } else if (m.type === 'angle') {
@@ -1255,8 +1728,16 @@ export default function App() {
                   angleDeg = 360 - angleDeg;
                 }
                 
+                const offsetX = m.labelOffset?.x ?? 0;
+                const offsetY = m.labelOffset?.y ?? 0;
+                const isHovered = hoveredId === m.id;
+                const isSelected = selectedObjectIds.includes(m.id);
+                const color = (isHovered && activeTool === 'delete') ? "#ef4444" : (isSelected ? "#b45309" : "#d97706");
+                
                 return (
-                  <Group key={m.id}>
+                  <Group key={m.id} id={m.id} name="measurement_label"
+                     onMouseEnter={() => setHoveredId(m.id)}
+                     onMouseLeave={() => setHoveredId(null)}>
                     <KonvaArc
                       x={p2.x}
                       y={p2.y}
@@ -1264,11 +1745,117 @@ export default function App() {
                       outerRadius={20}
                       angle={angleDeg}
                       rotation={rotation}
-                      fill="rgba(245, 158, 11, 0.2)"
-                      stroke="#d97706"
-                      strokeWidth={1}
+                      fill={color === "#ef4444" ? "rgba(239, 68, 68, 0.2)" : (isSelected ? "rgba(180, 83, 9, 0.2)" : "rgba(245, 158, 11, 0.2)")}
+                      stroke={color}
+                      strokeWidth={isSelected || (isHovered && activeTool === 'delete') ? 2 : 1}
                     />
-                    <KonvaText x={tx - 15} y={ty - 8} text={ang} fill="#d97706" fontSize={14} fontStyle="bold" />
+                    <KonvaText 
+                      x={tx - 15 + offsetX} 
+                      y={ty - 8 + offsetY} 
+                      text={ang} 
+                      fill={color} 
+                      fontSize={14} 
+                      fontStyle="bold" 
+                      draggable={activeTool === 'select'}
+                      onDragStart={(e) => {
+                         if (activeTool === 'select') {
+                             saveHistory();
+                             e.cancelBubble = true;
+                         }
+                      }}
+                      onDragMove={(e) => {
+                         if (activeTool === 'select') {
+                             const nx = e.target.x() - (tx - 15);
+                             const ny = e.target.y() - (ty - 8);
+                             setMeasurements(prev => prev.map(oldM => oldM.id === m.id ? { ...oldM, labelOffset: { x: nx, y: ny } } : oldM));
+                         }
+                      }}
+                      onMouseEnter={(e) => {
+                         const container = e.target.getStage()?.container();
+                         if (container && activeTool === 'select') container.style.cursor = 'move';
+                      }}
+                      onMouseLeave={(e) => {
+                         const container = e.target.getStage()?.container();
+                         if (container) container.style.cursor = activeTool === 'select' ? 'default' : 'crosshair';
+                      }}
+                    />
+                  </Group>
+                );
+              } else if (m.type === 'perimeter') {
+                const pts = m.points.map(pid => evalPoints[pid]).filter(Boolean) as {x: number, y: number}[];
+                if (pts.length < 3) return null;
+                const perimeter = calculatePolygonPerimeter(pts);
+                const centroid = calculatePolygonCentroid(pts);
+                const offsetX = m.labelOffset?.x ?? 0;
+                const offsetY = m.labelOffset?.y ?? 0;
+                const isHovered = hoveredId === m.id;
+                const isSelected = selectedObjectIds.includes(m.id);
+                const color = (isHovered && activeTool === 'delete') ? "#ef4444" : (isSelected ? "#312e81" : "#4f46e5");
+                return (
+                  <Group key={m.id} id={m.id} name="measurement_label" x={centroid.x} y={centroid.y}
+                     onMouseEnter={() => setHoveredId(m.id)}
+                     onMouseLeave={() => setHoveredId(null)}>
+                    <KonvaLine
+                      points={pts.flatMap(p => [p.x - centroid.x, p.y - centroid.y])}
+                      closed={true}
+                      stroke={color}
+                      strokeWidth={isSelected ? 3 : 2}
+                      dash={[5, 5]}
+                    />
+                    <KonvaRect
+                      x={offsetX - 25}
+                      y={offsetY - 12}
+                      width={50}
+                      height={24}
+                      fill="white"
+                      cornerRadius={4}
+                      stroke={color}
+                      strokeWidth={1}
+                      draggable={activeTool === 'select'}
+                      onDragStart={(e) => {
+                         if (activeTool === 'select') {
+                             saveHistory();
+                             e.cancelBubble = true;
+                         }
+                      }}
+                      onDragMove={(e) => {
+                         if (activeTool === 'select') {
+                             // Limit drag distance
+                             const MAX_DRAG = 50;
+                             const tx = e.target.x();
+                             const ty = e.target.y();
+                             const dist = Math.hypot(tx - (offsetX - 25), ty - (offsetY - 12));
+                             if (dist > MAX_DRAG) {
+                                 const nx = (offsetX - 25) + (tx - (offsetX - 25)) * MAX_DRAG / dist;
+                                 const ny = (offsetY - 12) + (ty - (offsetY - 12)) * MAX_DRAG / dist;
+                                 e.target.x(nx);
+                                 e.target.y(ny);
+                             }
+                             const rx = e.target.x() - (offsetX - 25);
+                             const ry = e.target.y() - (offsetY - 12);
+                             setMeasurements(prev => prev.map(oldM => oldM.id === m.id ? { ...oldM, labelOffset: { x: (oldM.labelOffset?.x || 0) + rx, y: (oldM.labelOffset?.y || 0) + ry } } : oldM));
+                         }
+                      }}
+                      onMouseEnter={(e) => {
+                         const container = e.target.getStage()?.container();
+                         if (container && activeTool === 'select') container.style.cursor = 'move';
+                      }}
+                      onMouseLeave={(e) => {
+                         const container = e.target.getStage()?.container();
+                         if (container) container.style.cursor = activeTool === 'select' ? 'default' : 'crosshair';
+                      }}
+                    />
+                    <KonvaText
+                      x={offsetX - 25}
+                      y={offsetY - 8}
+                      text={`${Math.round(perimeter)}`}
+                      fill={color}
+                      fontSize={14}
+                      fontStyle="bold"
+                      width={50}
+                      align="center"
+                      listening={false}
+                    />
                   </Group>
                 );
               } else if (m.type === 'area') {
@@ -1278,9 +1865,48 @@ export default function App() {
                 if (pts.length < 3) return null;
                 const area = calculatePolygonArea(pts);
                 const centroid = calculatePolygonCentroid(pts);
+                const offsetX = m.labelOffset?.x ?? 0;
+                const offsetY = m.labelOffset?.y ?? 0;
+                const isHovered = hoveredId === m.id;
+                const isSelected = selectedObjectIds.includes(m.id);
+                const color = (isHovered && activeTool === 'delete') ? "#ef4444" : (isSelected ? "#312e81" : "#4f46e5");
                 return (
-                  <Group key={m.id} x={centroid.x} y={centroid.y}>
-                    <KonvaText text={`S ≈ ${Math.round(area)}`} fontSize={16} fill="#4f46e5" fontStyle="bold" stroke="#ffffff" strokeWidth={3} fillAfterStrokeEnabled={true} />
+                  <Group key={m.id} id={m.id} name="measurement_label" x={centroid.x} y={centroid.y}
+                     onMouseEnter={() => setHoveredId(m.id)}
+                     onMouseLeave={() => setHoveredId(null)}>
+                    <KonvaText 
+                      x={offsetX} 
+                      y={offsetY} 
+                      text={`S ≈ ${Math.round(area)}`} 
+                      fontSize={16} 
+                      fill={color} 
+                      fontStyle="bold" 
+                      stroke="#ffffff" 
+                      strokeWidth={3} 
+                      fillAfterStrokeEnabled={true} 
+                      draggable={activeTool === 'select'}
+                      onDragStart={(e) => {
+                         if (activeTool === 'select') {
+                             saveHistory();
+                             e.cancelBubble = true;
+                         }
+                      }}
+                      onDragMove={(e) => {
+                         if (activeTool === 'select') {
+                             const nx = e.target.x();
+                             const ny = e.target.y();
+                             setMeasurements(prev => prev.map(oldM => oldM.id === m.id ? { ...oldM, labelOffset: { x: nx, y: ny } } : oldM));
+                         }
+                      }}
+                      onMouseEnter={(e) => {
+                         const container = e.target.getStage()?.container();
+                         if (container && activeTool === 'select') container.style.cursor = 'move';
+                      }}
+                      onMouseLeave={(e) => {
+                         const container = e.target.getStage()?.container();
+                         if (container) container.style.cursor = activeTool === 'select' ? 'default' : 'crosshair';
+                      }}
+                    />
                   </Group>
                 );
               }
@@ -1303,14 +1929,14 @@ export default function App() {
                     radius={5} fill="#94a3b8"
                   />
                 )}
-                {activeTool === 'polygon' && (
+                {(activeTool === 'polygon' || activeTool === 'measure_perimeter') && (
                   <KonvaLine
                     points={[
                       ...selectedIds.map(id => evalPoints[id]).filter(Boolean).flatMap(p => [p.x, p.y]),
                       mousePos.x, mousePos.y
                     ]}
                     closed={selectedIds.length >= 2}
-                    fill={selectedIds.length >= 2 ? "rgba(79, 70, 229, 0.1)" : undefined}
+                    fill={selectedIds.length >= 2 ? (activeTool === 'polygon' ? "rgba(79, 70, 229, 0.1)" : "transparent") : undefined}
                     stroke="#94a3b8" strokeWidth={2} dash={[5, 5]}
                   />
                 )}
@@ -1326,7 +1952,7 @@ export default function App() {
                     )}
                   </>
                 )}
-                {(activeTool === 'perpendicular' || activeTool === 'parallel') && (
+                {(activeTool === 'perpendicular' || activeTool === 'parallel' || activeTool === 'tangent') && (
                   <KonvaLine
                     points={
                       selectedIds.find(id => points.find(p => p.id === id))
@@ -1347,6 +1973,8 @@ export default function App() {
               return (
                 <Group key={point.id} x={ep.x} y={ep.y}>
                   <KonvaCircle
+                    x={0}
+                    y={0}
                     radius={hoveredId === point.id || isSelected ? 7 : 5}
                     fill={hoveredId === point.id && activeTool === 'delete' ? "#ef4444" : color}
                     stroke={hoveredId === point.id && activeTool === 'delete' ? "#ef4444" : (isSelected ? "#000000" : "#ffffff")}
@@ -1354,9 +1982,13 @@ export default function App() {
                     draggable={activeTool === 'select' && point.type === 'free'}
                     dragBoundFunc={(pos) => getSnappedPos(pos)}
                     onDragStart={(e) => handleObjectDragStart(e, point.id)}
-                    onDragMove={(e) => handleObjectDragMove(e, point.id)}
+                    onDragMove={(e) => {
+                      handleObjectDragMove(e, point.id);
+                      e.target.position({ x: 0, y: 0 }); // reset relative position so it doesn't drift from text
+                    }}
                     onDragEnd={(e) => {
                       handleObjectDragEnd(e);
+                      e.target.position({ x: 0, y: 0 }); // reset relative position just in case
                       const container = e.target.getStage()?.container();
                       if (container && activeTool === 'select' && point.type === 'free') container.style.cursor = 'grab';
                     }}
@@ -1371,7 +2003,40 @@ export default function App() {
                       if (container) container.style.cursor = activeTool === 'select' ? 'default' : 'crosshair';
                     }}
                   />
-                  <KonvaText text={point.name} x={8} y={-15} fontSize={14} fontFamily="sans-serif" fill={color} fontStyle="bold" stroke="#ffffff" strokeWidth={3} fillAfterStrokeEnabled={true} />
+                  <KonvaText 
+                    text={point.name} 
+                    x={point.labelOffset?.x ?? 5} 
+                    y={point.labelOffset?.y ?? -10} 
+                    fontSize={14} 
+                    fontFamily="sans-serif" 
+                    fill={color} 
+                    fontStyle="bold" 
+                    stroke="#ffffff" 
+                    strokeWidth={3} 
+                    fillAfterStrokeEnabled={true} 
+                    draggable={activeTool === 'select'}
+                    onDragStart={(e) => {
+                       if (activeTool === 'select') {
+                           saveHistory();
+                           e.cancelBubble = true;
+                       }
+                    }}
+                    onDragMove={(e) => {
+                       if (activeTool === 'select') {
+                           const nx = e.target.x();
+                           const ny = e.target.y();
+                           setPoints(prev => prev.map(p => p.id === point.id ? { ...p, labelOffset: { x: nx, y: ny } } : p));
+                       }
+                    }}
+                    onMouseEnter={(e) => {
+                       const container = e.target.getStage()?.container();
+                       if (container && activeTool === 'select') container.style.cursor = 'move';
+                    }}
+                    onMouseLeave={(e) => {
+                       const container = e.target.getStage()?.container();
+                       if (container) container.style.cursor = activeTool === 'select' ? 'default' : 'crosshair';
+                    }}
+                  />
                 </Group>
               );
             })}
@@ -1730,6 +2395,7 @@ export default function App() {
           {activeTool === 'point' && 'Nhấn bất kỳ đâu để tạo điểm.'}
           {activeTool === 'midpoint' && 'Chọn 2 điểm để tạo trung điểm.'}
           {activeTool === 'centroid' && 'Chọn 3 điểm để tạo trọng tâm.'}
+          {activeTool === 'intersection' && 'Chọn 2 đường thẳng để tạo giao điểm.'}
           {activeTool === 'segment' && 'Chọn 2 điểm để tạo đoạn thẳng.'}
           {activeTool === 'line' && 'Chọn 2 điểm để tạo đường thẳng.'}
           {activeTool === 'ray' && 'Chọn điểm bắt đầu, sau đó chọn hướng.'}
@@ -1739,10 +2405,13 @@ export default function App() {
           {activeTool === 'perp_bisector' && 'Chọn 2 điểm để tạo đường trung trực.'}
           {activeTool === 'median' && 'Chọn 3 điểm (điểm đầu tiên là đỉnh).'}
           {activeTool === 'circle' && 'Chọn tâm, sau đó chọn 1 điểm trên đường tròn.'}
+          {activeTool === 'inscribed_circle' && 'Nhấn vào một đa giác để vẽ đường tròn nội tiếp (hoặc tương đương).'}
+          {activeTool === 'tangent' && 'Chọn 1 điểm ngoại vi và 1 đường tròn để vẽ tiếp tuyến.'}
           {activeTool === 'polygon' && 'Chọn các đỉnh, nhấn lại đỉnh đầu tiên để đóng.'}
           {activeTool === 'measure_distance' && 'Chọn 2 điểm để đo khoảng cách.'}
           {activeTool === 'measure_angle' && 'Chọn 3 điểm để đo góc (điểm thứ 2 là đỉnh).'}
           {activeTool === 'measure_area' && 'Nhấn vào một đa giác để hiển thị diện tích của nó.'}
+          {activeTool === 'measure_perimeter' && 'Chọn các đỉnh, nhấn lại đỉnh đầu tiên để hiển thị chu vi.'}
           {activeTool === 'text' && 'Nhấn bất kỳ đâu để thêm chữ. Nhấn đúp vào chữ ở chế độ Chọn để sửa.'}
           {activeTool === 'delete' && 'Nhấn vào điểm, đường thẳng, đường tròn, đa giác hoặc chữ để xóa.'}
         </div>
